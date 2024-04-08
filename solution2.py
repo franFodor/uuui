@@ -1,327 +1,476 @@
 import sys
-import copy
 
-clauses = []
-final_clause = ''
-no_of_premises = 0
-no_of_new_clauses = 0
-index_deduced = 0
-index_total = 0
+# list of all clauses
+all_clauses = []
+# list of clasuses that are being used - ie when we remove redundant ones
+relevant_clauses = []
+# index to keep track of clauses
 clause_index = 0
-nil_pair = None
-        
-def parse_input(filename) -> None:
+# final clause so we can print it in the end
+final_clause = ""
+# final parents tuple
+final_parents = None
+# final clause
+final_clause_2 = None
+# all clauses for cooking
+cooking_all = []
+# path to NIL
+path = []
+
+
+# index for SoS start
+sos_index = 0
+# index for the other SoS
+total_index = 0
+
+
+class Literal:
+    def __init__(self, name, type) -> None:
+        self.name = name
+        self.type = type
+    
+    def __str__(self) -> str:
+        if self.type == False:
+            return f"~{self.name}"
+        else:
+            return f"{self.name}"
+
+    def __eq__(self, other) -> bool:
+        if self.name == other.name and self.type == other.type:
+            return True
+        return False
+
+    def __hash__(self):
+        return hash((self.name, self.type))
+
+
+class Clause:
+    def __init__(self, literals, index, parent=None) -> None:
+        self.literals = literals
+        self.index = index
+        self.parent = parent
+
+    def __repr__(self) -> str:
+        return f"{self.index}. {' v '.join(str(literal) for literal in self.literals)} from {self.parent}"
+
+    def __str__(self) -> str:
+        return f"{self.index}. {' v '.join(str(literal) for literal in self.literals)} from {self.parent}"
+    
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Clause):
+            return False
+        if len(self.literals) != len(other.literals):
+            return False
+        for literal_self, literal_other in zip(self.literals, other.literals):
+            if literal_self.name != literal_other.name or literal_self.type != literal_other.type:
+                return False
+        return True
+
+    def __hash__(self):
+        return hash(tuple(self.literals))
+
+    def factiorization(self) -> None:
+        for i, literal in enumerate(self.literals.copy()):
+            for literal_2 in list(self.literals.copy())[i+1:]:
+                # if there are two equal literals, remove one of them
+                if literal.name == literal_2.name and literal.type == literal_2.type:
+                    self.literals.remove(literal_2)
+
+    def tautology(self) -> bool:
+        for i, literal in enumerate(self.literals):
+            for literal_2 in list(self.literals.copy())[i+1:]:
+                # if there is a literal and its complement dont add it
+                if literal.name == literal_2.name and literal.type != literal_2.type:
+                    return False
+                
+        return True
+    
+    def subset(self, other_clause):
+        # Convert literals to a set for faster lookup
+        other_literals_set = {literal.name: literal.type for literal in other_clause.literals}
+
+        # Check if each literal in self is present in other_clause
+        for literal in self.literals:
+            if literal.name not in other_literals_set or literal.type != other_literals_set[literal.name]:
+                return False
+        return True
+
+
+def resolve(clause_1, clause_2, resolve_literal) -> "Clause":
+    clause_tmp = set()
+    # search until you find the literal and skip it, add the rest to the new clause
+    for literal in clause_1.literals:
+        for literal_2 in clause_2.literals:
+            if literal_2.name != resolve_literal.name:
+                clause_tmp.add(literal_2)
+        if literal.name != resolve_literal.name:
+            clause_tmp.add(literal)
+
     global clause_index
+    return_clause = Clause(clause_tmp, clause_index, (clause_1.index, clause_2.index))
+    clause_index += 1 
+    return return_clause
+
+
+def print_clauses() -> None:
+    for clause in relevant_clauses:
+        print(clause)
+    return
+
+
+def print_clauses_all() -> None:
+    for clause in all_clauses:
+        print(clause)
+    return
+
+
+def parse_input(filename, cooking_input="") -> None:
+    global clause_index, relevant_clauses, all_clauses
     file = open(filename, mode="r", encoding="utf-8")
     lines = file.readlines()
+
+    # counter to keep track of lines so we know when we reached the last one
     counter = 0
-    counter_2 = 0
+
+    # counter to keep track of where the starting SoS is 
+    counter_sos = 0
+
+    # number of comments
+    no_of_comments = 0
+
     for line in lines:
         line = line.strip()
         line = line.lower()
-        # komentar
-        if line == "#":
+        # comment line
+        if "#" in line:
+            no_of_comments += 1
             continue
+
         line_tmp = line
         line = line.split(" v ")
 
-        clauses_tmp = []
-        # dosli smo do zadnje linije
-        if counter == len(lines) - 1:
+        # temp list to keep track of literals in the current line
+        clause_tmp = set()
+
+        # last line, we need to negate it
+        if counter == len(lines) - 1 - no_of_comments and not cooking_input:
+            global sos_index
+            sos_index = counter_sos
             global final_clause
             final_clause = line_tmp
-            # ako je manji od 3 - sadrzi samo jedan literal
+            # if its less than 2 it means there is only one literal
             if len(line) < 2:
                 for clause in line:
                     if "~" in clause:
-                        clauses_tmp.append(clause.replace("~", ""))
+                        name = clause.replace("~", "")
+                        clause_tmp.add(Literal(name, True))
                     elif "~" not in clause:
-                        clauses_tmp.append("~" + clause)
-                clauses.append((clauses_tmp, clause_index, None))
+                        name = clause
+                        clause_tmp.add(Literal(name, False))
+                all_clauses.append(Clause(list(clause_tmp), clause_index, None))
                 clause_index += 1
                 break
-            # neki kompleksiniji izraz, treba parsat
+            # more literals, have to use demorgan
             else:
                 for clause in line:
                     if "~" in clause:
-                        clauses_tmp.append(clause.replace("~", ""))
+                        name = clause.replace("~", "")
+                        clause_tmp.add(Literal(name, True))
                     elif "~" not in clause:
-                        clauses_tmp.append("~" + clause)
-                    if clauses_tmp not in clauses:
-                        clauses.append((clauses_tmp, clause_index, None))
+                        name = clause
+                        clause_tmp.add(Literal(name, False))
+                    if clause_tmp not in all_clauses:
+                        all_clauses.append(Clause((clause_tmp), clause_index, None))
                         clause_index += 1
-                        clauses_tmp = []
+                        clause_tmp = set()
                     
                 break
 
-        for clause in line:
-            # provjeri tautologiju nekak
-            clauses_tmp.append(clause)
+        # for each literal in line
+        for literal in line:
+            if "~" in literal:
+                name = literal.replace("~", "")
+                clause_tmp.add(Literal(name, False))
+            else:
+                name = literal
+                clause_tmp.add(Literal(name, True))
 
-        flag = True
-        for literal in clauses_tmp.copy():
-            for literal_2 in clauses_tmp.copy():
-                if literal == "~" + literal_2 or literal_2 == "~" + literal:
-                    counter_2 -= 1
-                    flag = False
-        if flag == True:
-            clauses.append((clauses_tmp, clause_index, None))
+        # create a clause and add it to list (if its not tautology)
+        clause = Clause(list(clause_tmp), clause_index, None)
+        if clause.tautology():
+            clause.factiorization()
+            all_clauses.append(clause)
             clause_index += 1
-
+            counter_sos += 1
+        
         counter += 1
-        counter_2 += 1
 
-    global no_of_premises, no_of_new_clauses
-    tmp = len(clauses) - counter_2
-    no_of_premises = len(clauses) - tmp
+    # add them to relevant_clauses
+    relevant_clauses = all_clauses.copy()
+
+    if cooking_input:
+        file = open(cooking_input, mode="r", encoding="utf-8")
+        lines = file.readlines()
+
+        first_flag = True
+
+        for line in lines:
+            line = line.strip()
+            line = line.lower()
+
+            print("\nUser's command:", line)
+
+            # if it is out first time thru, set sos to counter
+            if first_flag:
+                sos_index = counter_sos
+                first_flag = False
+
+            if line.endswith("?"):
+                relevant_clauses = all_clauses.copy()
+                clause_tmp = set()
+                line = line.split(" ?")
+                final_clause = line[0]
+                # negate the input
+                if "~" in line[0]:
+                    name = line[0].replace("~", "")
+                    clause_tmp.add(Literal(name, True))
+                elif "~" not in line[0]:
+                    name = line[0]
+                    clause_tmp.add(Literal(name, False))
+                if clause_tmp not in all_clauses:
+                    all_clauses.append(Clause((clause_tmp), clause_index, None))
+                    relevant_clauses.append(Clause((clause_tmp), clause_index, None))
+                    clause_index += 1
+
+                # save index and clauses before
+                sos_before = sos_index
+                clauses_before = all_clauses.copy()
+                if pl_resolution():
+                    find_path(path, final_clause_2)
+                    path_s = sorted(path, key=lambda x: x.index)
+                    for el in path_s:
+                        print(el)
+                    print(f"NIL {final_parents}")
+                    print(f"[CONCLUSION]: {final_clause} is true")
+                else:
+                    print(f"[CONCLUSION]: {final_clause} is unknown")
+
+                sos_index = sos_before
+                all_clauses = clauses_before
+
+                # remove the command
+                all_clauses.pop()
+                sos_index -= 1
+
+                # clear list of clauses
+                cooking_all.clear()
+                
+                
+            elif line.endswith("-"):
+                line = line.split(" -")
+                clause_tmp = set()
+
+                to_remove = line[0]
+
+                line = line[0].split(" v ")
+                for literal in line:
+                    if "~" in literal:
+                        name = literal.replace("~", "")
+                        clause_tmp.add(Literal(name, False))
+                    else:
+                        name = literal
+                        clause_tmp.add(Literal(name, True))
+
+                clause = Clause((clause_tmp), clause_index, None)
+                clause_index += 1
+                if clause in all_clauses:
+                    all_clauses.remove(clause)
+                    sos_index -= 1
+                
+                print(f"Removed {to_remove}")
+
+                    
+            elif line.endswith("+"):
+                line = line.split(" +")
+                clause_tmp = set()
+
+                to_add = line[0]
+
+                line = line[0].split(" v ")
+                for literal in line:
+                    if "~" in literal:
+                        name = literal.replace("~", "")
+                        clause_tmp.add(Literal(name, False))
+                    else:
+                        name = literal
+                        clause_tmp.add(Literal(name, True))
+
+                clause = Clause((clause_tmp), clause_index, None)
+                clause_index += 1
+                    
+
+                if clause not in all_clauses:
+                    all_clauses.append(clause)
+                    sos_index += 1
+
+                print(f"Added {to_add}")
 
     return 
 
 
-# TODO izbacit duplikate iz liste
+def select_clauses():
+    global sos_index, total_index
+    #print("selecting...", sos_index)
+    #print(relevant_clauses[sos_index])
+    for clause in relevant_clauses[sos_index:]:
+        for i, clause_2 in enumerate(relevant_clauses[total_index:], total_index):
+            for literal in clause_2.literals:
+                for literal_2 in clause.literals:
+                    if literal.name == literal_2.name and literal.type != literal_2.type:
+                        #print_clauses()
+                        total_index = i + 1
+                        #print("Found:", literal, literal_2, clause, clause_2)
+                        return resolve(clause, clause_2, literal)     
+        total_index = 0
+        sos_index += 1
 
-def select_clauses() -> tuple:
-    # ako imaju komplementarne literale vrati ih
-    # TODO prepravit da ide po SoS
-
-    global index_total, index_deduced
-    #print("totaln", index_total)
-    #print("deduced ",index_deduced)
-
-    for clause in clauses[index_deduced:]:
-        for clause_2 in clauses[index_total:]:
-            for literal_i in clause_2[0]:
-                literal = literal_i
-                #print("+++++++++++++++++++++")
-                #print(clause)
-                #print(clause_2)
-                #print(literal)
-                # makni negaciju
-                if "~" in literal:
-                    literal = literal.replace("~", "")
-                    literal_r = literal
-                    
-                # dodaj negaciju 
-                else:
-                    literal_r = literal
-                    literal = "~" + literal
-                ##print(literal)
-                if literal in clause[0]:
-                    index_total += 1
-                    return (clause[0], clause_2[0], literal_r, clause[1], clause_2[1])
-            index_total += 1
-            if index_total > no_of_premises and index_deduced < no_of_premises:
-                index_total = 0
-        #print("BRUH MOMENTO")
-        index_total = 0
-        index_deduced += 1
-
-    return None
-
-
-def pl_resolve(pair) -> list:
-    # copy jer modificira orginalni clauses inace jer ima referencu idalje
-    pair_tmp = copy.deepcopy(pair)
-    #print("ULAY--------------------------")
-    #print(pair)
-    global clause_index
-    
-    # makni ga iz prve
-    if pair[2] in pair[0]:
-        pair_tmp[0].remove(pair[2])
-    elif "~" + pair[2] in pair[0]:
-        pair_tmp[0].remove("~" + pair[2])
-
-    # makni ga iz druge
-    if pair[2] in pair[1]:
-        pair_tmp[1].remove(pair[2])
-    elif "~" + pair[2] in pair[1]:
-        pair_tmp[1].remove("~" + pair[2])
-
-    # ponistili smo ih -> nasli smo NIL
-    if len(pair_tmp[0]) == 0 and len(pair_tmp[1]) == 0:
-        global nil_pair
-        nil_pair = pair
-        return None
-    
-
-    if pair_tmp[0] == pair_tmp[1]:
-        return_val = (pair_tmp[0], clause_index, (pair_tmp[3], pair_tmp[4]))
-        clause_index += 1
-        return return_val
-    else:
-        return_val = (pair_tmp[0] + pair_tmp[1], clause_index, (pair_tmp[3], pair_tmp[4]))
-        clause_index += 1
-        return return_val
-
-
-def update_list_of_lists(list_of_lists, target_list):
-    target_set = set(target_list)
-    for i, sublist in enumerate(list_of_lists):
-        if target_set.issubset(sublist):
-            list_of_lists.pop(i)
-            list_of_lists.append(target_list)
-            return
-
-def remove_redundant(clauses, pair) -> list:
-
-
-    return
-
-def remove_unimportant(pair) -> list:
-    #print("BRUAZ KOJI KURAC", pair)
-    # tautologija
-    for literal in pair[0]:
-        for literal_2 in pair[0]:
-            if literal == "~" + literal_2 or literal_2 == "~" + literal:
-                #print("ALOOOOO", literal, literal_2)
-                #exit()
-                return None
-    # faktorizacija
-    pair = list(set(pair[0]))
-            
-    return pair
 
 def pl_resolution() -> bool:
-    new = []
-    global index_deduced, no_of_premises, clauses, index_total
-    index_deduced = no_of_premises - 1
+    global total_index, sos_index
+
+    # remove subesets from input
     while True:
-        #print("----------------------------\nnova iteracija") 
-        # nova iteracija, dodane nove klauzule
-        #print("premisa", no_of_premises, index_deduced)
-        if index_deduced <= no_of_premises:
-            index_deduced = no_of_premises
-        else:
-            index_deduced += 1 
-        index_total = 0
-        pair = select_clauses()   
-        if pair == None: 
-            return False
-        #print("par2", pair)
+        clauses_before = relevant_clauses.copy()
+        for i, clause in enumerate(relevant_clauses.copy()):
+            for clause_2 in relevant_clauses.copy()[i+1:]:
+                if clause_2.subset(clause):
+                    #print("buraz", clause, clause_2)
+                    if i < sos_index:
+                        sos_index -= 1
+                    total_index = 0
+                    relevant_clauses.remove(clause)
+                    break
+        if len(clauses_before) == len(relevant_clauses):
+            break
 
-        while pair != None:
-            resolvents = pl_resolve(pair)
-            #print("RESOLVENT", resolvents)
+    while True:
+        new = set()
+        total_index = 0
+        resolvents = select_clauses()
+        #print("REsolce outer", resolvents)
 
-            # ako je NIL
-            if resolvents == None:
-                #print("NIL")
-                #print(clauses)
+        # if resolvents is None -> we could not find any matches
+        if not resolvents:
+            break
+
+        resolvents.factiorization()
+
+        # remove subsets
+        for i, clause in enumerate(relevant_clauses.copy()):
+            if resolvents.subset(clause):
+                if i < sos_index:
+                    sos_index -= 1
+                total_index = 0
+                relevant_clauses.remove(clause)
+        
+        while resolvents:
+            #if not resolvents:
+                #return False
+            # if the clause that returned is empty -> we got NIL
+            if not resolvents.literals:
+                global final_parents, final_clause_2
+                final_parents = resolvents.parent
+                final_clause_2 = resolvents
                 return True
             
-            # TODO ove dve funkcije prepravit, i mozda rewrite sa klasom za klauzulu
-
-            ##print(remove_redundant(clauses, resolvents))
-            #resolvents = remove_unimportant(resolvents)
-            if resolvents != None:
-                # dodaj u new
-                if resolvents not in new:
-                    new.append(resolvents)
-
+            # remove subsets 
+            for i, clause in enumerate(relevant_clauses.copy()):
+                if resolvents.subset(clause):
+                    if i < sos_index:
+                        sos_index -= 1
+                    total_index = 0
+                    relevant_clauses.remove(clause)
             
+            # otherwise, add the new clause
+            if resolvents.tautology():
+                flag = False
+                for clause in new:
+                    if clause.literals == resolvents.literals:
+                        flag = True
+                if not flag:
+                    new.add(resolvents)
 
-            #print("NOVI BURAQ", new)
-            #print(clauses)
+            resolvents = select_clauses()
+            if resolvents:
+                resolvents.factiorization()
+                
 
-            pair = select_clauses()    
-            #print("par", pair)
+            #print("Resolve innder", resolvents)
 
-        
-        #print("clause prie", clauses)
-        #print("new prie", new)
+        # if we didnt make anything new
+        # TODO do this better
         flag = False
-        for clause in new:
-            if clause not in clauses:
+        for el in new:
+            if el not in relevant_clauses:
                 flag = True
                 break
+
         if flag == False:
             return False
-        
 
-        tmp = len(clauses) - no_of_premises
-        no_of_premises = no_of_premises + tmp
+        for el in new:
+            relevant_clauses.append(el)
+            all_clauses.append(el)
 
-        #print("broj premisa, zelimo da bude index sa kojeg se nanovo krece", no_of_premises)
+        #print_clauses()
 
-        for clause in new:
-            #print("BRATE STA JE OVO")
+    return False
+
+
+def find_path(path, clause_i) -> None:
+    if clause_i.parent is None:
+        return
+    # go recursiverly to parents
+    for clause in all_clauses.copy():
+        if clause.index in clause_i.parent:
             #print(clause)
-            if clause not in clauses:
-                clauses.append(clause)
-        #print(clauses)
+            if clause not in path:
+                path.append(clause)
+            find_path(path, clause)
 
-    
-    return    
-
-
-def find_path(path, parents) -> None:
-    for clause in clauses:
-        if clause[1] in parents:
-            if clause[2] is not None:
-                find_path(path, clause[2])    
-            if clause[2] is not None:
-                tmp = ""
-                last_flag = False
-                i = 0
-                for literal in clause[0]:
-                    tmp += literal
-                    if i == len(clause[0]) - 1:
-                        last_flag = True
-                    if last_flag == False:
-                        tmp += " v "
-                    i += 1
-                    
-                path[clause[1]] = f". {tmp} {clause[2]}"
-            else:
-                tmp = ""
-                last_flag = False
-                i = 0
-                for literal in clause[0]:
-                    tmp += literal
-                    if i == len(clause[0]) - 1:
-                        last_flag = True
-                    if last_flag == False:
-                        tmp += " v "
-                    i += 1
-
-                path[clause[1]] = f". {tmp}"
 
     return
+
 
 def main():
     args = []
     filename = ""
     mode = ""
+
     for arg in sys.argv:
         args.append(arg)
 
-
     args_iter = iter(args)
-    # preskoci prvi argument (ime programa)
-    
+    # skip the first argument (program name)
     _ = next(args_iter)
     mode = next(args_iter)
     filename = next(args_iter)
-    parse_input(filename)
-    #print("pocetno", clauses)
-
 
     if mode == "resolution":
-        if pl_resolution() == True:
-            path = {}
-            find_path(path, set((nil_pair[3], nil_pair[4])))
-            path = dict(sorted(path.items()))
-            for key, value in path.items():
-                print(key, value)
-            print(f"NIL iz ({nil_pair[3]}, {nil_pair[4]})")   
+        parse_input(filename)
+        pl_resolution()
+        if final_parents:
+            find_path(path, final_clause_2)
+            path_s = sorted(path, key=lambda x: x.index)
+            for el in path_s:
+                print(el)
+            print(f"NIL {final_parents}")
             print(f"[CONCLUSION]: {final_clause} is true")
         else:
             print(f"[CONCLUSION]: {final_clause} is unknown")
-
     elif mode == "cooking":
-        pass
-        #cooking()
+        cooking_input = next(args_iter)
+        parse_input(filename, cooking_input)
 
     return
 
